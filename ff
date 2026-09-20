@@ -1,0 +1,154 @@
+#!/bin/sh
+printf '%s\n' 'PICK THE FOLDER YOUR VIDEO FILE IS IN'
+printf '%s\n' 'once the folder picker opens'
+sleep 3
+pickFolder
+clear
+# 1. Display a numbered, alphabetically sorted list of files
+i=1
+has_files=0
+
+for f in *; do
+    # Handle the edge case of an empty directory where * expands to itself
+    if [ "$f" = "*" ] && [ ! -e "$f" ]; then
+        break
+    fi
+    has_files=1
+    printf "%3d) %s\n" "$i" "$f"
+    i=$((i + 1))
+done
+
+if [ "$has_files" -eq 0 ]; then
+    echo "No files found in the current directory."
+    exit 1
+fi
+
+# 2. Ask the user to type a number
+printf "Enter the number of the file you want: "
+read -r selection
+
+# 3. Find the corresponding file and set $targetfile to just the file name
+i=1
+targetfile=""
+for f in *; do
+    if [ "$i" -eq "$selection" ]; then
+        targetfile="$f"
+        break
+    fi
+    i=$((i + 1))
+done
+
+# Validate selection
+if [ -z "$targetfile" ]; then
+    echo "Error: Invalid selection."
+    exit 1
+fi
+
+# Shrink font size and ensure it resets automatically upon exit
+config -s 6
+trap 'config -s default' EXIT
+
+clear
+
+echo "=========== Easy FFMPEG for a-Shell ==========="
+
+# Check if an input file was provided as a parameter
+if [ -z "$targetfile" ]; then
+    echo "Error: No file specified."
+    echo "Usage: ff <filename>"
+    exit 1
+fi
+
+INPUT="$targetfile"
+
+# Verify the file exists
+if [ ! -f "$INPUT" ]; then
+    echo "Error: File '$INPUT' not found."
+    exit 1
+fi
+
+# Extract filename without extension
+BASENAME="${INPUT%.*}"
+
+
+# Automatically detect if the video stream is H.265 (HEVC)
+HVC_FLAG=""
+VIDEO_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$INPUT" 2>/dev/null)
+
+if [ "$VIDEO_CODEC" = "hevc" ]; then
+    HVC_FLAG="-tag:v hvc1"
+    echo ""
+    echo "-> Detected H.265 input video codec." 
+    echo "Adding -tag:v hvc1 parameter to MP4 options."
+    echo ""
+else
+    echo ""
+    echo "-> Detected input video codec: ${VIDEO_CODEC:-unknown}"
+    echo ""
+fi
+
+# Automatically detect the first audio stream codec
+AUDIO_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$INPUT" 2>/dev/null)
+
+echo "-> Detected the first audio stream codec: ${AUDIO_CODEC:-unknown}"
+echo "Remember that DTS & TrueHD aren't supported by iOS/iPadOS"
+echo ""
+
+echo "========================================="
+echo " FFMPEG Processing Menu"
+echo " Target File: $INPUT"
+echo "========================================="
+echo "0) Exit"
+echo "1) Remux to MP4"
+echo "2) Clean MKV"
+echo "3) Remux DTS or TrueHD to surround FLAC MP4"
+echo "4) Remux to MP4 using the second audio stream"
+echo "5) Remux DTS or TrueHD to surround FLAC MP4 using the second audio stream"
+echo "6) Remux to MP4 using the third audio stream"
+echo "7) Remux DTS or TrueHD to surround FLAC MP4 using the third audio stream"
+echo "-------------------------------------"
+printf "Enter your choice [0-7]: "
+read -r choice
+
+#Audio stream titles will be removed when transcoding to FLAC.
+#I did this on purpose. Because the titles often contain the audio codec name.
+#Which becomes confusing after I change the audio codec.
+
+case "$choice" in
+    0)
+        echo "Exiting. No changes made."
+        exit 0
+        ;;
+    1)
+        ffmpeg -i "$INPUT" -c:v copy -c:a copy $HVC_FLAG "${BASENAME}.mp4"
+        ;;
+
+    2)
+        # Note: Using '_clean' suffix prevents overwriting your original input file
+        ffmpeg -i "$INPUT" -c copy -map 0:V -map 0:a -map 0:s -map_chapters -1 -metadata title= -disposition:s:0 0 -disposition:s:1 0 -disposition:s:2 0 "${BASENAME}_clean.mkv"
+        ;;
+    3)
+        ffmpeg -i "$INPUT" -c:v copy -c:a flac -compression_level 12 -metadata:s:a:0 title="" $HVC_FLAG "${BASENAME}_flac.mp4"
+        ;;
+
+    4)
+        ffmpeg -i "$INPUT" -map 0:v -map 0:a:1 -c copy $HVC_FLAG "${BASENAME}_track2.mp4"
+        ;;
+
+    5)
+        ffmpeg -i "$INPUT" -map 0:v -map 0:a:1 -c:v copy -c:a flac -compression_level 12 -metadata:s:a:0 title="" $HVC_FLAG "${BASENAME}_track2_flac.mp4"
+        ;;
+        
+    6)
+        ffmpeg -i "$INPUT" -map 0:v -map 0:a:2 -c copy $HVC_FLAG "${BASENAME}_track3.mp4"
+        ;;
+
+    7)
+        ffmpeg -i "$INPUT" -map 0:v -map 0:a:2 -c:v copy -c:a flac -compression_level 12 -metadata:s:a:0 title="" $HVC_FLAG "${BASENAME}_track3_flac.mp4"
+        ;;
+
+    *)
+        echo "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac
